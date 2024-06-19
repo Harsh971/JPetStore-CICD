@@ -1,84 +1,141 @@
-MyBatis JPetStore
-=================
+<img src="https://github.com/Harsh971/JPetStore-CICD/blob/master/architecture.gif"></img>
 
-[![Java CI](https://github.com/mybatis/jpetstore-6/actions/workflows/ci.yaml/badge.svg)](https://github.com/mybatis/jpetstore-6/actions/workflows/ci.yaml)
-[![Container Support](https://github.com/mybatis/jpetstore-6/actions/workflows/support.yaml/badge.svg)](https://github.com/mybatis/jpetstore-6/actions/workflows/support.yaml)
-[![Coverage Status](https://coveralls.io/repos/github/mybatis/jpetstore-6/badge.svg?branch=master)](https://coveralls.io/github/mybatis/jpetstore-6?branch=master)
-[![License](https://img.shields.io/:license-apache-brightgreen.svg)](https://www.apache.org/licenses/LICENSE-2.0.html)
-
-![mybatis-jpetstore](https://mybatis.org/images/mybatis-logo.png)
+# JPetStore CICD
 
 JPetStore 6 is a full web application built on top of MyBatis 3, Spring 5 and Stripes.
 
-Essentials
+Essential Jenkins Plugins
 ----------
 
-* [See the docs](http://www.mybatis.org/jpetstore-6)
+- `jdk` : Eclipse Temurin installer
+- `sonar` : SonarQube Scanner
+- `owasp` : OWASP Dependency-Check
+- `docker` : Docker, Docker Pipeline
 
-## Other versions that you may want to know about
+## Configuration of Plugins
 
-- JPetstore on top of Spring, Spring MVC, MyBatis 3, and Spring Security https://github.com/making/spring-jpetstore
-- JPetstore with Vaadin and Spring Boot with Java Config https://github.com/igor-baiborodine/jpetstore-6-vaadin-spring-boot
-- JPetstore on MyBatis Spring Boot Starter https://github.com/kazuki43zoo/mybatis-spring-boot-jpetstore
+### Configure Plugins : 
+- Manage Jenkins > Global Tool Configuration
 
-## Run on Application Server
-Running JPetStore sample under Tomcat (using the [cargo-maven2-plugin](https://codehaus-cargo.github.io/cargo/Maven2+plugin.html)).
+### JDK Installation
+- Name : jdk17
+- Install Automatically > Install from adoptium.net > Version 17
 
-- Clone this repository
+### SonarQube Scanner installations
+- Name : sonar-scanner
+- Install Automatically > Version (Default)
 
-  ```
-  $ git clone https://github.com/mybatis/jpetstore-6.git
-  ```
+### Maven installations
+- Name : maven3
+- Install Automatically > Version 3.6.0
 
-- Build war file
+### Dependency-Check installations
+- Name : DP
+- Install Automatically > Install from github.com > dependency-check 6.5.1
 
-  ```
-  $ cd jpetstore-6
-  $ ./mvnw clean package
-  ```
+### Docker installations
+- Name : docker
+- Install Automatically > Version (latest)
 
-- Startup the Tomcat server and deploy web application
 
-  ```
-  $ ./mvnw cargo:run -P tomcat90
-  ```
+## Initiating SonarQube
+- for the stage named : "SonarQube Analysis" we need to have sonarqube running so we will do it using Docker
+Command : <br> `docker run -d --name sonar -p 9000:9000 sonarqube:lts-community`
 
-  > Note:
-  >
-  > We provide maven profiles per application server as follow:
-  >
-  > | Profile        | Description |
-  > | -------------- | ----------- |
-  > | tomcat90       | Running under the Tomcat 9.0 |
-  > | tomcat85       | Running under the Tomcat 8.5 |
-  > | tomee80        | Running under the TomEE 8.0(Java EE 8) |
-  > | tomee71        | Running under the TomEE 7.1(Java EE 7) |
-  > | wildfly26      | Running under the WildFly 26(Java EE 8) |
-  > | wildfly13      | Running under the WildFly 13(Java EE 7) |
-  > | liberty-ee8    | Running under the WebSphere Liberty(Java EE 8) |
-  > | liberty-ee7    | Running under the WebSphere Liberty(Java EE 7) |
-  > | jetty          | Running under the Jetty 9 |
-  > | glassfish5     | Running under the GlassFish 5(Java EE 8) |
-  > | glassfish4     | Running under the GlassFish 4(Java EE 7) |
-  > | resin          | Running under the Resin 4 |
-
-- Run application in browser http://localhost:8080/jpetstore/ 
-- Press Ctrl-C to stop the server.
-
-## Run on Docker
-```
-docker build . -t jpetstore
-docker run -p 8080:8080 jpetstore
-```
-or with Docker Compose:
-```
-docker compose up -d
-```
-
-## Try integration tests
-
-Perform integration tests for screen transition.
+## Jenkins File :
 
 ```
-$ ./mvnw clean verify -P tomcat90
+pipeline {
+    agent any
+	
+	tools{
+		jdk 'jdk17'
+		maven 'maven3'
+	}
+	
+	environment {
+		SCANNER_HOME= tool 'sonar-scanner'
+	}
+
+    stages {
+        stage('Git Checkout') {
+            steps {
+                git changelog: false, poll: false, url: 'https://github.com/Harsh971/JPetStore-CICD.git'
+            }
+        }
+		stage('Maven Compile') {
+            steps {
+                sh "mvn clean compile"
+            }
+        }
+		stage('SonarQube Analysis') {
+            steps {
+                sh ''' $SCANNER_HOME/bin/sonar-scanner \
+				-Dsonar.host.url=http://<IP>:9000 \
+				-Dsonar.login=<SonarQube TOKEN> \
+				-Dsonar.projectName=petstore \
+				-Dsonar.java.binaries=. \
+				-Dsonar.projectKey=petstore '''
+            }
+        }
+		stage('OWASP Dependency Check') {
+            steps {
+                dependencyCheck additionalArguments: '--scan ./', odcInstallation: 'DP'
+				dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+        stage('Maven Build') {
+            steps {
+                sh "mvn clean install"
+            }
+        }
+		stage('Build and Push Docker Image') {
+            steps {
+                script{
+					withDockerRegistry(credentialsId: 'DockerHub', toolName: 'docker') {
+						sh "docker build -t petstore ."
+						sh "docker tag petstore harsh0369/petstore:latest"
+						sh "docker push harsh0369/petstore:latest"
+					}
+				}				
+            }
+        }
+		stage('Deploy Docker Image') {
+            steps {
+                script{
+					withDockerRegistry(credentialsId: 'DockerHub', toolName: 'docker') {
+						sh "docker run -d -p 8081:8080 harsh0369/petstore:latest"
+					}
+				}				
+            }
+        }
+    }
+}
+
 ```
+
+## Output Snapshots : 
+<img src="https://github.com/Harsh971/JPetStore-CICD/blob/master/output1.png"></img>          
+<br>
+<img src="https://github.com/Harsh971/JPetStore-CICD/blob/master/output2.png"></img>
+
+## Source Credits :
+Original Source Code : [Click Here](https://github.com/mybatis/jpetstore-6)
+Tutorial Reference : [Click Here](https://www.youtube.com/watch?v=jwGe59RnxtA&list=PPSV)
+
+## Feedback
+
+Your feedback is valuable! If you have suggestions for improving existing content or ideas for new additions, please open an issue or reach out to the repository maintainers. If you have any other feedbacks, you can reach out to us at harsh.thakkar0369@gmail.com
+
+
+## Connect with Me
+<p>
+
+ <a href="https://twitter.com/HarshThakkar971" target="blank"><img align="center" src="https://img.freepik.com/premium-vector/vector-new-twitter-x-white-logo-black-background_744381-866.jpg" alt="HarshThakkar971" height="40" width="50" /></a>
+  &nbsp;&nbsp;
+  	<a href="https://linkedin.com/in/harsh-thakkar-7764bb1a4" target="blank"><img align="center" src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/LinkedIn_logo_initials.png/800px-LinkedIn_logo_initials.png" alt="harsh-thakkar-7764bb1a4" height="40" width="40" /></a>
+  &nbsp;&nbsp;
+ <a href="https://instagram.com/harsh_thakkar09" target="blank"><img align="center" src="https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Instagram_logo_2016.svg/768px-Instagram_logo_2016.svg.png" alt="harsh_thakkar09" height="40" width="40" /></a>
+</p>
+
+
